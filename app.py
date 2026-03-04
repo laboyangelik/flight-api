@@ -34,7 +34,7 @@ def search():
         )
 
         flights = []
-        for f in result.flights[:15]:
+        for f in result.flights:
             try:
                 price_num = float(str(f.price).replace("$", "").replace(",", ""))
             except (ValueError, AttributeError):
