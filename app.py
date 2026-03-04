@@ -25,18 +25,23 @@ def search():
             trip="round-trip" if return_date else "one-way",
             seat="economy",
             passengers=Passengers(adults=adults),
-            fetch_mode="fallback",
         )
 
         flights = []
         for f in result.flights[:15]:
+            # Parse price string like "$443" or "$1,234" into a number
+            try:
+                price_num = float(str(f.price).replace("$", "").replace(",", ""))
+            except (ValueError, AttributeError):
+                price_num = None
+
             flights.append({
-                "price":     f.price,
-                "airline":   f.name,
-                "duration":  f.duration,
+                "price":     price_num,
+                "airline":   f.name or "",
+                "duration":  f.duration or "",
                 "stops":     f.stops,
-                "departure": f.departure,
-                "arrival":   f.arrival,
+                "departure": f.departure or "",
+                "arrival":   f.arrival or "",
                 "is_best":   f.is_best,
             })
 
