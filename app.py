@@ -27,22 +27,28 @@ def search():
             passengers=Passengers(adults=adults),
         )
 
+        # Build Google Flights search URL
+        booking_url = (
+            f"https://www.google.com/travel/flights?q=Flights+from+{origin}+to+{destination}"
+            f"+on+{depart_date}" + (f"+returning+{return_date}" if return_date else "")
+        )
+
         flights = []
         for f in result.flights[:15]:
-            # Parse price string like "$443" or "$1,234" into a number
             try:
                 price_num = float(str(f.price).replace("$", "").replace(",", ""))
             except (ValueError, AttributeError):
                 price_num = None
 
             flights.append({
-                "price":     price_num,
-                "airline":   f.name or "",
-                "duration":  f.duration or "",
-                "stops":     f.stops,
-                "departure": f.departure or "",
-                "arrival":   f.arrival or "",
-                "is_best":   f.is_best,
+                "price":       price_num,
+                "airline":     f.name or "",
+                "duration":    f.duration or "",
+                "stops":       f.stops,
+                "departure":   f.departure or "",
+                "arrival":     f.arrival or "",
+                "is_best":     f.is_best,
+                "booking_url": booking_url,
             })
 
         return jsonify({
@@ -51,6 +57,7 @@ def search():
             "depart_date": depart_date,
             "return_date": return_date,
             "adults":      adults,
+            "booking_url": booking_url,
             "flights":     flights,
         })
 
