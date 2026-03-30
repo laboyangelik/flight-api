@@ -7,6 +7,70 @@ from fli.models import FlightSearchFilters, DateSearchFilters, PassengerInfo, So
 app = Flask(__name__)
 
 
+def _encode_varint(value):
+    result = []
+    while value > 127:
+        result.append((value & 127) | 128)
+        value >>= 7
+    result.append(value)
+    return bytes(result)
+
+
+def _pb_string(field, value):
+    tag = _encode_varint((field << 3) | 2)
+    enc = value.encode("utf-8")
+    return tag + _encode_varint(len(enc)) + enc
+
+
+def _pb_bytes(field, value):
+    tag = _encode_varint((field << 3) | 2)
+    return tag + _encode_varint(len(value)) + value
+
+
+def _pb_varint(field, value):
+    return _encode_varint((field << 3) | 0) + _encode_varint(value)
+
+
+def _build_tfs(legs_out, legs_in=None):
+    """Build Google Flights tfs protobuf from leg data."""
+    import base64
+
+    def build_route(leg):
+        r = b""
+        r += _pb_string(1, leg["from"])
+        r += _pb_string(2, leg["departure"][:10])
+        r += _pb_string(3, leg["to"])
+        try:
+            from fli.models import Airline
+            airline_enum = getattr(Airline, leg["airline"].replace(" ", "_").upper(), None)
+            iata = airline_enum.name if airline_enum else leg["airline"][:2].upper()
+        except Exception:
+            iata = leg["airline"][:2].upper()
+        r += _pb_string(5, iata)
+        r += _pb_string(6, str(leg["flight_number"]))
+        return r
+
+    def build_segment(legs):
+        seg = b""
+        seg += _pb_string(2, legs[0]["departure"][:10])
+        for leg in legs:
+            seg += _pb_bytes(4, build_route(leg))
+        return seg
+
+    msg = b""
+    msg += _pb_varint(1, 28)
+    msg += _pb_varint(2, 2 if legs_in else 1)
+    msg += _pb_bytes(3, build_segment(legs_out))
+    if legs_in:
+        msg += _pb_bytes(3, build_segment(legs_in))
+    msg += _pb_varint(8, 1)
+    msg += _pb_varint(9, 1)
+    msg += _pb_varint(14, 1)
+
+    tfs = base64.b64encode(msg).decode("utf-8")
+    return f"https://www.google.com/travel/flights/booking?tfs={tfs}&hl=en-US&gl=US"
+
+
 def _serialize_leg(leg):
     try:
         airline_name = leg.airline.value
@@ -41,6 +105,11 @@ def _serialize_flight(result):
             name = str(leg.airline)
         if name not in airlines:
             airlines.append(name)
+    serialized_legs = [_serialize_leg(leg) for leg in legs]
+    try:
+        booking_url = _build_tfs(serialized_legs)
+    except Exception:
+        booking_url = None
     return {
         "price": result.price,
         "airline": airlines[0] if airlines else None,
@@ -49,7 +118,8 @@ def _serialize_flight(result):
         "stops": result.stops,
         "departure": legs[0].departure_datetime.isoformat() if legs else None,
         "arrival": legs[-1].arrival_datetime.isoformat() if legs else None,
-        "legs": [_serialize_leg(leg) for leg in legs],
+        "legs": serialized_legs,
+        "booking_url": booking_url,
     }
 
 
@@ -103,10 +173,17 @@ def search():
         for r in results[:top_n]:
             if isinstance(r, tuple):
                 outbound, ret = r
+                s_out = _serialize_flight(outbound)
+                s_ret = _serialize_flight(ret)
+                try:
+                    booking_url = _build_tfs(s_out["legs"], s_ret["legs"])
+                except Exception:
+                    booking_url = s_out.get("booking_url")
                 flights.append({
-                    "outbound": _serialize_flight(outbound),
-                    "return": _serialize_flight(ret),
+                    "outbound": s_out,
+                    "return": s_ret,
                     "price": (outbound.price or 0) + (ret.price or 0),
+                    "booking_url": booking_url,
                 })
             else:
                 flights.append(_serialize_flight(r))
