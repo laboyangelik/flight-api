@@ -239,7 +239,7 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Return a Google Flights URL using the natural language q= param."""
+    """Use Steel to load the q= URL and capture the real tfs= URL Google generates."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
@@ -251,7 +251,49 @@ def resolve_booking_url():
 
     legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
     legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
-    return jsonify({"booking_url": _build_tfs(legs_out, legs_in)})
+    q_url = _build_tfs(legs_out, legs_in)  # the ?q= URL — works as fallback too
+
+    try:
+        import os
+        import steel
+        from playwright.sync_api import sync_playwright
+
+        steel_api_key = os.environ.get("STEEL_API_KEY")
+        steel_client = steel.Steel(steel_api_key=steel_api_key)
+        session = steel_client.sessions.create(solve_captcha=True)
+        cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
+
+        resolved_url = q_url
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.connect_over_cdp(cdp_url)
+                context = browser.contexts[0]
+                page = context.new_page()
+
+                # Navigate to the q= URL — Google processes the natural language query
+                page.goto(q_url, wait_until="domcontentloaded", timeout=60000)
+
+                # Wait for Google to resolve the query into a tfs= URL
+                try:
+                    page.wait_for_function(
+                        "() => window.location.href.includes('tfs=')",
+                        timeout=20000
+                    )
+                except Exception:
+                    page.wait_for_timeout(5000)
+
+                live_url = page.url
+                if "tfs=" in live_url and "google.com/travel/flights" in live_url:
+                    resolved_url = live_url
+
+                browser.close()
+        finally:
+            steel_client.sessions.release(session.id)
+
+        return jsonify({"booking_url": resolved_url})
+
+    except Exception as e:
+        return jsonify({"booking_url": q_url, "fallback": True, "error": str(e)})
 
 
 if __name__ == "__main__":
