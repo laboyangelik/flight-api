@@ -1,0 +1,5 @@
+[phases.setup]
+nixPkgs = ["firefox", "geckodriver"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt", "playwright install firefox"]

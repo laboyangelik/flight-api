@@ -287,6 +287,98 @@ def dates():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/resolve_booking_url")
+def resolve_booking_url():
+    """Use a headless browser to get the real Google Flights booking URL for a specific flight."""
+    args = request.args
+    origin = p(args, "origin").upper()
+    destination = p(args, "destination").upper()
+    depart_date = p(args, "depart_date")
+    return_date = p(args, "return_date") or None
+    airline = p(args, "airline")
+    flight_number = p(args, "flight_number")
+
+    if not origin or not destination or not depart_date or not airline or not flight_number:
+        return jsonify({"error": "origin, destination, depart_date, airline, and flight_number are required"}), 400
+
+    try:
+        from playwright.sync_api import sync_playwright
+
+        if return_date:
+            search_url = (
+                f"https://www.google.com/flights?hl=en"
+                f"#flt={origin}.{destination}.{depart_date}"
+                f"*{destination}.{origin}.{return_date};c:USD;e:1;sd:1;t:f"
+            )
+        else:
+            search_url = (
+                f"https://www.google.com/flights?hl=en"
+                f"#flt={origin}.{destination}.{depart_date};c:USD;e:1;sd:1;t:o"
+            )
+
+        booking_url = None
+
+        with sync_playwright() as pw:
+            browser = pw.firefox.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+                viewport={"width": 1280, "height": 800},
+            )
+            page = context.new_page()
+            page.goto(search_url, wait_until="networkidle", timeout=30000)
+            page.wait_for_timeout(3000)
+
+            # Find and click the flight matching our airline + flight number
+            flight_label = f"{airline} {flight_number}"
+            matched = False
+
+            # Try to find a flight card containing the airline and flight number
+            cards = page.query_selector_all("[data-ved]")
+            for card in cards:
+                text = card.inner_text()
+                if airline.lower() in text.lower() and str(flight_number) in text:
+                    card.click()
+                    page.wait_for_timeout(2000)
+                    matched = True
+                    break
+
+            if not matched:
+                # Click the first result as fallback
+                first = page.query_selector("li[data-ved]") or page.query_selector(".pIav2d")
+                if first:
+                    first.click()
+                    page.wait_for_timeout(2000)
+
+            # Look for a "Select" or "Book" button and click it
+            for selector in ["text=Select", "text=Book", "[data-ved] button", "button.WXaAwc"]:
+                btn = page.query_selector(selector)
+                if btn:
+                    btn.click()
+                    page.wait_for_timeout(3000)
+                    break
+
+            current_url = page.url
+            if "tfs=" in current_url:
+                booking_url = current_url
+
+            browser.close()
+
+        if booking_url:
+            return jsonify({"booking_url": booking_url})
+        else:
+            # Fall back to tfs-constructed URL
+            tfs_url = _build_tfs(
+                [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00",
+                  "airline": airline, "flight_number": flight_number}],
+                [{"from": destination, "to": origin, "departure": return_date + "T00:00:00",
+                  "airline": airline, "flight_number": flight_number}] if return_date else None
+            )
+            return jsonify({"booking_url": tfs_url, "fallback": True})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 8080))

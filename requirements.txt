@@ -1,3 +1,4 @@
 flights
 flask
 gunicorn
+playwright
