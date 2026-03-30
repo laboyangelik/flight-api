@@ -286,17 +286,29 @@ def resolve_booking_url():
 
                 # Navigate to Google Flights homepage
                 page.goto("https://www.google.com/travel/flights?hl=en&gl=us", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(3000)
+                page.wait_for_timeout(4000)
 
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
+
+                # Make sure we're on the Flights tab, not Explore
+                try:
+                    flights_tab = page.query_selector('a[href*="/travel/flights"]:has-text("Flights"), [aria-label="Flights"]')
+                    if flights_tab:
+                        js_click(flights_tab)
+                        page.wait_for_timeout(2000)
+                except Exception:
+                    pass
 
                 def fill_airport(label_fragment, code):
                     el = page.wait_for_selector(f'input[aria-label*="{label_fragment}"]', timeout=8000)
                     js_click(el)
                     page.wait_for_timeout(500)
-                    el.fill("")
-                    page.keyboard.type(code, delay=80)
+                    # Select all and delete existing content
+                    page.keyboard.press("Control+a")
+                    page.keyboard.press("Delete")
+                    page.wait_for_timeout(300)
+                    page.keyboard.type(code, delay=100)
                     page.wait_for_timeout(2500)
                     # Pick option with airport code in parentheses e.g. "(JFK)"
                     try:
@@ -304,7 +316,6 @@ def resolve_booking_url():
                         js_click(option)
                     except Exception:
                         try:
-                            # Fallback: first option that contains the code
                             option = page.wait_for_selector(f'li[role="option"]:has-text("{code}")', timeout=3000)
                             js_click(option)
                         except Exception:
