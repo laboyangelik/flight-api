@@ -319,12 +319,14 @@ def resolve_booking_url():
             )
 
         booking_url = None
-        steel_client = steel.Steel(steel_api_key=os.environ.get("STEEL_API_KEY"))
+        steel_api_key = os.environ.get("STEEL_API_KEY")
+        steel_client = steel.Steel(steel_api_key=steel_api_key)
         session = steel_client.sessions.create()
+        cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
 
         try:
             with sync_playwright() as pw:
-                browser = pw.chromium.connect_over_cdp(session.websocket_url)
+                browser = pw.chromium.connect_over_cdp(cdp_url)
                 context = browser.contexts[0]
                 page = context.new_page()
 
