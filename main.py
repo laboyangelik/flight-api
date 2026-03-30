@@ -21,22 +21,16 @@ app = Flask(__name__)
 
 
 def _build_tfs(legs_out, legs_in=None):
-    """Build a Google Flights search URL from leg data."""
+    """Build a Google Flights search URL using the natural language q= param."""
     origin = legs_out[0]["from"]
     destination = legs_out[-1]["to"]
     depart_date = legs_out[0]["departure"][:10]
     if legs_in:
         return_date = legs_in[0]["departure"][:10]
-        return (
-            f"https://www.google.com/travel/flights?hl=en"
-            f"#flt={origin}.{destination}.{depart_date}"
-            f"*{destination}.{origin}.{return_date};c:USD;e:1;sd:1;t:r"
-        )
+        q = f"Flights from {origin} to {destination} on {depart_date} returning {return_date}"
     else:
-        return (
-            f"https://www.google.com/travel/flights?hl=en"
-            f"#flt={origin}.{destination}.{depart_date};c:USD;e:1;sd:1;t:o"
-        )
+        q = f"Flights from {origin} to {destination} on {depart_date}"
+    return "https://www.google.com/travel/flights?q=" + q.replace(" ", "+")
 
 
 def _serialize_leg(leg):
@@ -245,7 +239,7 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Use Steel to fill Google Flights search form and capture the real tfs= URL."""
+    """Return a Google Flights URL using the natural language q= param."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
@@ -255,124 +249,9 @@ def resolve_booking_url():
     if not origin or not destination or not depart_date:
         return jsonify({"error": "origin, destination, and depart_date are required"}), 400
 
-    # Simple fallback query URL — at minimum opens Google Flights with the right search pre-filled
-    trip = "r" if return_date else "o"
-    date_part = f"{depart_date},{return_date}" if return_date else depart_date
-    fallback_url = f"https://www.google.com/travel/flights?hl=en&q=Flights+from+{origin}+to+{destination}+{date_part.replace('-', '+')}&trip={trip}"
-
-    try:
-        import os
-        import steel
-        from playwright.sync_api import sync_playwright
-
-        steel_api_key = os.environ.get("STEEL_API_KEY")
-        steel_client = steel.Steel(steel_api_key=steel_api_key)
-        session = steel_client.sessions.create(solve_captcha=True)
-        cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
-
-        resolved_url = fallback_url
-        try:
-            with sync_playwright() as pw:
-                browser = pw.chromium.connect_over_cdp(cdp_url)
-                context = browser.contexts[0]
-                page = context.new_page()
-
-                def js_click(el):
-                    page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
-
-                page.goto("https://www.google.com/travel/flights?hl=en", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(3000)
-
-                # Switch to one-way if needed
-                if not return_date:
-                    try:
-                        trip_btn = page.query_selector('[data-value="1"]')
-                        if trip_btn:
-                            js_click(trip_btn)
-                            page.wait_for_timeout(400)
-                            ow = page.wait_for_selector('[data-value="2"]', timeout=3000)
-                            js_click(ow)
-                            page.wait_for_timeout(400)
-                    except Exception:
-                        pass
-
-                # Fill origin
-                try:
-                    inp = page.wait_for_selector('input[placeholder="Where from?"]', timeout=8000)
-                    inp.click()
-                    page.wait_for_timeout(300)
-                    page.keyboard.press("Control+A")
-                    page.keyboard.type(origin, delay=120)
-                    page.wait_for_timeout(2000)
-                    opt = page.wait_for_selector('li[role="option"]', timeout=5000)
-                    js_click(opt)
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
-
-                # Fill destination
-                try:
-                    inp = page.wait_for_selector('input[placeholder="Where to?"]', timeout=8000)
-                    inp.click()
-                    page.wait_for_timeout(300)
-                    page.keyboard.type(destination, delay=120)
-                    page.wait_for_timeout(2000)
-                    opt = page.wait_for_selector('li[role="option"]', timeout=5000)
-                    js_click(opt)
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
-
-                # Fill departure date
-                try:
-                    inp = page.wait_for_selector('input[placeholder="Departure"]', timeout=6000)
-                    js_click(inp)
-                    page.wait_for_timeout(400)
-                    inp.fill(depart_date)
-                    page.wait_for_timeout(400)
-                    page.keyboard.press("Enter")
-                    page.wait_for_timeout(600)
-                except Exception:
-                    pass
-
-                # Fill return date
-                if return_date:
-                    try:
-                        inp = page.wait_for_selector('input[placeholder="Return"]', timeout=5000)
-                        js_click(inp)
-                        page.wait_for_timeout(400)
-                        inp.fill(return_date)
-                        page.wait_for_timeout(400)
-                        page.keyboard.press("Enter")
-                        page.wait_for_timeout(600)
-                    except Exception:
-                        pass
-
-                # Click Search
-                try:
-                    btn = page.wait_for_selector('button[aria-label="Search"], button:has-text("Search")', timeout=6000)
-                    js_click(btn)
-                except Exception:
-                    page.keyboard.press("Enter")
-
-                # Wait for results — the URL will now have tfs= in it
-                try:
-                    page.wait_for_function("() => window.location.href.includes('tfs=')", timeout=20000)
-                except Exception:
-                    page.wait_for_timeout(5000)
-
-                live_url = page.url
-                if live_url and "google.com/travel/flights" in live_url and live_url != "https://www.google.com/travel/flights?hl=en":
-                    resolved_url = live_url
-
-                browser.close()
-        finally:
-            steel_client.sessions.release(session.id)
-
-        return jsonify({"booking_url": resolved_url})
-
-    except Exception as e:
-        return jsonify({"booking_url": fallback_url, "fallback": True, "error": str(e)})
+    legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
+    legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
+    return jsonify({"booking_url": _build_tfs(legs_out, legs_in)})
 
 
 if __name__ == "__main__":
