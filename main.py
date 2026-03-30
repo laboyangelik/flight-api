@@ -245,22 +245,20 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Use Steel to load Google Flights, click the best matching flight, and return a booking URL."""
+    """Use Steel to fill Google Flights search form and capture the real tfs= URL."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
     depart_date = p(args, "depart_date")
     return_date = p(args, "return_date") or None
-    airline = p(args, "airline")
-    flight_number = p(args, "flight_number")
 
     if not origin or not destination or not depart_date:
         return jsonify({"error": "origin, destination, and depart_date are required"}), 400
 
-    legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
-    legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
-    search_url = _build_tfs(legs_out, legs_in)
-    search_hash = search_url.split("#", 1)[1]  # everything after #
+    # Simple fallback query URL — at minimum opens Google Flights with the right search pre-filled
+    trip = "r" if return_date else "o"
+    date_part = f"{depart_date},{return_date}" if return_date else depart_date
+    fallback_url = f"https://www.google.com/travel/flights?hl=en&q=Flights+from+{origin}+to+{destination}+{date_part.replace('-', '+')}&trip={trip}"
 
     try:
         import os
@@ -269,81 +267,103 @@ def resolve_booking_url():
 
         steel_api_key = os.environ.get("STEEL_API_KEY")
         steel_client = steel.Steel(steel_api_key=steel_api_key)
-        # No use_proxy — residential proxy causes ERR_CONNECTION_CLOSED with Google
         session = steel_client.sessions.create(solve_captcha=True)
         cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
 
-        resolved_url = search_url
+        resolved_url = fallback_url
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.connect_over_cdp(cdp_url)
                 context = browser.contexts[0]
                 page = context.new_page()
 
-                # Step 1: load base page first (no hash), then apply the search hash
-                # Avoids ERR_CONNECTION_CLOSED that happens when navigating directly to #flt= URL
-                page.goto("https://www.google.com/travel/flights?hl=en", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(2000)
-                page.evaluate(f"window.location.hash = '{search_hash}'")
-
-                # Step 2: wait for flight results to render
-                try:
-                    page.wait_for_selector("li.pIav2d, .yR1LBd", timeout=25000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(2000)
-
-                # Step 3: click the best matching flight (by airline/flight number), else first result
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
-                items = page.query_selector_all("li.pIav2d")
-                clicked = False
-                if items and (airline or flight_number):
-                    for item in items:
-                        try:
-                            text = item.inner_text()
-                            airline_match = not airline or airline.lower() in text.lower()
-                            fn_match = not flight_number or str(flight_number) in text
-                            if airline_match and fn_match:
-                                js_click(item)
-                                page.wait_for_timeout(3000)
-                                clicked = True
-                                break
-                        except Exception:
-                            continue
+                page.goto("https://www.google.com/travel/flights?hl=en", wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
 
-                if not clicked and items:
-                    js_click(items[0])
-                    page.wait_for_timeout(3000)
-
-                # Step 4: click Select to get the /booking?tfs= URL
-                booking_url_captured = None
-                def on_response(response):
-                    nonlocal booking_url_captured
-                    if "tfs=" in response.url and "google.com" in response.url:
-                        booking_url_captured = response.url
-
-                page.on("response", on_response)
-
-                for sel in ["button.WXaAwc", "[jsname='j7LFlb']", "button:has-text('Select')"]:
+                # Switch to one-way if needed
+                if not return_date:
                     try:
-                        btn = page.query_selector(sel)
-                        if btn:
-                            js_click(btn)
-                            page.wait_for_timeout(5000)
-                            break
+                        trip_btn = page.query_selector('[data-value="1"]')
+                        if trip_btn:
+                            js_click(trip_btn)
+                            page.wait_for_timeout(400)
+                            ow = page.wait_for_selector('[data-value="2"]', timeout=3000)
+                            js_click(ow)
+                            page.wait_for_timeout(400)
                     except Exception:
-                        continue
+                        pass
+
+                # Fill origin
+                try:
+                    inp = page.wait_for_selector('input[placeholder="Where from?"]', timeout=8000)
+                    inp.click()
+                    page.wait_for_timeout(300)
+                    page.keyboard.press("Control+A")
+                    page.keyboard.type(origin, delay=120)
+                    page.wait_for_timeout(2000)
+                    opt = page.wait_for_selector('li[role="option"]', timeout=5000)
+                    js_click(opt)
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
+
+                # Fill destination
+                try:
+                    inp = page.wait_for_selector('input[placeholder="Where to?"]', timeout=8000)
+                    inp.click()
+                    page.wait_for_timeout(300)
+                    page.keyboard.type(destination, delay=120)
+                    page.wait_for_timeout(2000)
+                    opt = page.wait_for_selector('li[role="option"]', timeout=5000)
+                    js_click(opt)
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
+
+                # Fill departure date
+                try:
+                    inp = page.wait_for_selector('input[placeholder="Departure"]', timeout=6000)
+                    js_click(inp)
+                    page.wait_for_timeout(400)
+                    inp.fill(depart_date)
+                    page.wait_for_timeout(400)
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(600)
+                except Exception:
+                    pass
+
+                # Fill return date
+                if return_date:
+                    try:
+                        inp = page.wait_for_selector('input[placeholder="Return"]', timeout=5000)
+                        js_click(inp)
+                        page.wait_for_timeout(400)
+                        inp.fill(return_date)
+                        page.wait_for_timeout(400)
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(600)
+                    except Exception:
+                        pass
+
+                # Click Search
+                try:
+                    btn = page.wait_for_selector('button[aria-label="Search"], button:has-text("Search")', timeout=6000)
+                    js_click(btn)
+                except Exception:
+                    page.keyboard.press("Enter")
+
+                # Wait for results — the URL will now have tfs= in it
+                try:
+                    page.wait_for_function("() => window.location.href.includes('tfs=')", timeout=20000)
+                except Exception:
+                    page.wait_for_timeout(5000)
 
                 live_url = page.url
-                if "tfs=" in live_url and "google.com" in live_url:
+                if live_url and "google.com/travel/flights" in live_url and live_url != "https://www.google.com/travel/flights?hl=en":
                     resolved_url = live_url
-                elif booking_url_captured:
-                    resolved_url = booking_url_captured
-                elif live_url and "google.com" in live_url and "#flt=" in live_url:
-                    resolved_url = live_url
-                # else: resolved_url stays as search_url (the #flt= fallback)
 
                 browser.close()
         finally:
@@ -352,7 +372,7 @@ def resolve_booking_url():
         return jsonify({"booking_url": resolved_url})
 
     except Exception as e:
-        return jsonify({"booking_url": search_url, "fallback": True, "error": str(e)})
+        return jsonify({"booking_url": fallback_url, "fallback": True, "error": str(e)})
 
 
 if __name__ == "__main__":
