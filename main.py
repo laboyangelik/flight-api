@@ -352,10 +352,21 @@ def resolve_booking_url():
 
                 # Check final URL
                 current_url = page.url
+                page_title = page.title()
+                page_text = page.inner_text("body")[:500]
+                li_count = len(page.query_selector_all("li"))
                 if "tfs=" in current_url and "tfu=" in current_url:
                     booking_url = current_url
                 elif booking_url_from_nav:
                     booking_url = booking_url_from_nav
+
+                debug = {
+                    "final_url": current_url,
+                    "page_title": page_title,
+                    "page_text_preview": page_text,
+                    "li_count": li_count,
+                    "matched": matched,
+                }
 
                 browser.close()
         finally:
@@ -370,7 +381,7 @@ def resolve_booking_url():
                 [{"from": destination, "to": origin, "departure": return_date + "T00:00:00",
                   "airline": airline, "flight_number": flight_number}] if return_date else None
             )
-            return jsonify({"booking_url": tfs_url, "fallback": True})
+            return jsonify({"booking_url": tfs_url, "fallback": True, "debug": debug})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
