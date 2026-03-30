@@ -19,68 +19,24 @@ def _with_retry(fn, retries=3, backoff=20):
 app = Flask(__name__)
 
 
-def _encode_varint(value):
-    result = []
-    while value > 127:
-        result.append((value & 127) | 128)
-        value >>= 7
-    result.append(value)
-    return bytes(result)
-
-
-def _pb_string(field, value):
-    tag = _encode_varint((field << 3) | 2)
-    enc = value.encode("utf-8")
-    return tag + _encode_varint(len(enc)) + enc
-
-
-def _pb_bytes(field, value):
-    tag = _encode_varint((field << 3) | 2)
-    return tag + _encode_varint(len(value)) + value
-
-
-def _pb_varint(field, value):
-    return _encode_varint((field << 3) | 0) + _encode_varint(value)
-
 
 def _build_tfs(legs_out, legs_in=None):
-    """Build Google Flights tfs protobuf from leg data."""
-    import base64
-
-    def build_route(leg):
-        r = b""
-        r += _pb_string(1, leg["from"])
-        r += _pb_string(2, leg["departure"][:10])
-        r += _pb_string(3, leg["to"])
-        try:
-            from fli.models import Airline
-            airline_enum = getattr(Airline, leg["airline"].replace(" ", "_").upper(), None)
-            iata = airline_enum.name if airline_enum else leg["airline"][:2].upper()
-        except Exception:
-            iata = leg["airline"][:2].upper()
-        r += _pb_string(5, iata)
-        r += _pb_string(6, str(leg["flight_number"]))
-        return r
-
-    def build_segment(legs):
-        seg = b""
-        seg += _pb_string(2, legs[0]["departure"][:10])
-        for leg in legs:
-            seg += _pb_bytes(4, build_route(leg))
-        return seg
-
-    msg = b""
-    msg += _pb_varint(1, 28)
-    msg += _pb_varint(2, 2 if legs_in else 1)
-    msg += _pb_bytes(3, build_segment(legs_out))
+    """Build a Google Flights search URL from leg data."""
+    origin = legs_out[0]["from"]
+    destination = legs_out[-1]["to"]
+    depart_date = legs_out[0]["departure"][:10]
     if legs_in:
-        msg += _pb_bytes(3, build_segment(legs_in))
-    msg += _pb_varint(8, 1)
-    msg += _pb_varint(9, 1)
-    msg += _pb_varint(14, 1)
-
-    tfs = base64.b64encode(msg).decode("utf-8")
-    return f"https://www.google.com/travel/flights/booking?tfs={tfs}&hl=en-US&gl=US"
+        return_date = legs_in[0]["departure"][:10]
+        return (
+            f"https://www.google.com/flights?hl=en"
+            f"#flt={origin}.{destination}.{depart_date}"
+            f"*{destination}.{origin}.{return_date};c:USD;e:1;sd:1;t:r"
+        )
+    else:
+        return (
+            f"https://www.google.com/flights?hl=en"
+            f"#flt={origin}.{destination}.{depart_date};c:USD;e:1;sd:1;t:o"
+        )
 
 
 def _serialize_leg(leg):
