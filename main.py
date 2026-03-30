@@ -245,19 +245,114 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Return a Google Flights search URL for a specific route."""
+    """Use Steel to load Google Flights, click the best matching flight, and return a booking URL."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
     depart_date = p(args, "depart_date")
     return_date = p(args, "return_date") or None
+    airline = p(args, "airline")
+    flight_number = p(args, "flight_number")
 
     if not origin or not destination or not depart_date:
         return jsonify({"error": "origin, destination, and depart_date are required"}), 400
 
     legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
     legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
-    return jsonify({"booking_url": _build_tfs(legs_out, legs_in)})
+    search_url = _build_tfs(legs_out, legs_in)
+    search_hash = search_url.split("#", 1)[1]  # everything after #
+
+    try:
+        import os
+        import steel
+        from playwright.sync_api import sync_playwright
+
+        steel_api_key = os.environ.get("STEEL_API_KEY")
+        steel_client = steel.Steel(steel_api_key=steel_api_key)
+        # No use_proxy — residential proxy causes ERR_CONNECTION_CLOSED with Google
+        session = steel_client.sessions.create(solve_captcha=True)
+        cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
+
+        resolved_url = search_url
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.connect_over_cdp(cdp_url)
+                context = browser.contexts[0]
+                page = context.new_page()
+
+                # Step 1: load base page first (no hash), then apply the search hash
+                # Avoids ERR_CONNECTION_CLOSED that happens when navigating directly to #flt= URL
+                page.goto("https://www.google.com/travel/flights?hl=en", wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(2000)
+                page.evaluate(f"window.location.hash = '{search_hash}'")
+
+                # Step 2: wait for flight results to render
+                try:
+                    page.wait_for_selector("li.pIav2d, .yR1LBd", timeout=25000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(2000)
+
+                # Step 3: click the best matching flight (by airline/flight number), else first result
+                def js_click(el):
+                    page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
+
+                items = page.query_selector_all("li.pIav2d")
+                clicked = False
+                if items and (airline or flight_number):
+                    for item in items:
+                        try:
+                            text = item.inner_text()
+                            airline_match = not airline or airline.lower() in text.lower()
+                            fn_match = not flight_number or str(flight_number) in text
+                            if airline_match and fn_match:
+                                js_click(item)
+                                page.wait_for_timeout(3000)
+                                clicked = True
+                                break
+                        except Exception:
+                            continue
+
+                if not clicked and items:
+                    js_click(items[0])
+                    page.wait_for_timeout(3000)
+
+                # Step 4: click Select to get the /booking?tfs= URL
+                booking_url_captured = None
+                def on_response(response):
+                    nonlocal booking_url_captured
+                    if "tfs=" in response.url and "google.com" in response.url:
+                        booking_url_captured = response.url
+
+                page.on("response", on_response)
+
+                for sel in ["button.WXaAwc", "[jsname='j7LFlb']", "button:has-text('Select')"]:
+                    try:
+                        btn = page.query_selector(sel)
+                        if btn:
+                            js_click(btn)
+                            page.wait_for_timeout(5000)
+                            break
+                    except Exception:
+                        continue
+
+                live_url = page.url
+                if "tfs=" in live_url and "google.com" in live_url:
+                    resolved_url = live_url
+                elif booking_url_captured:
+                    resolved_url = booking_url_captured
+                elif live_url and "google.com" in live_url and "#flt=" in live_url:
+                    resolved_url = live_url
+                # else: resolved_url stays as search_url (the #flt= fallback)
+
+                browser.close()
+        finally:
+            steel_client.sessions.release(session.id)
+
+        return jsonify({"booking_url": resolved_url})
+
+    except Exception as e:
+        return jsonify({"booking_url": search_url, "fallback": True, "error": str(e)})
 
 
 if __name__ == "__main__":
