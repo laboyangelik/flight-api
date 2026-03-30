@@ -245,7 +245,7 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Use a headless browser to load and return a Google Flights search URL for a specific route."""
+    """Return a Google Flights search URL for a specific route."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
@@ -255,50 +255,9 @@ def resolve_booking_url():
     if not origin or not destination or not depart_date:
         return jsonify({"error": "origin, destination, and depart_date are required"}), 400
 
-    # Build the #flt= deep-link URL — this is the correct Google Flights search format
     legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
     legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
-    target_url = _build_tfs(legs_out, legs_in)
-
-    try:
-        import os
-        import steel
-        from playwright.sync_api import sync_playwright
-
-        steel_api_key = os.environ.get("STEEL_API_KEY")
-        steel_client = steel.Steel(steel_api_key=steel_api_key)
-        session = steel_client.sessions.create(use_proxy=True, solve_captcha=True)
-        cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
-
-        resolved_url = target_url
-        try:
-            with sync_playwright() as pw:
-                browser = pw.chromium.connect_over_cdp(cdp_url)
-                context = browser.contexts[0]
-                page = context.new_page()
-
-                page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-                # Wait for Google Flights to process the #flt= fragment and load results
-                try:
-                    page.wait_for_selector("li.pIav2d, [data-ved], .yR1LBd", timeout=20000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(3000)
-
-                # Return the live URL — Google may append/normalize params after load
-                live_url = page.url
-                if live_url and "google.com" in live_url:
-                    resolved_url = live_url
-
-                browser.close()
-        finally:
-            steel_client.sessions.release(session.id)
-
-        return jsonify({"booking_url": resolved_url})
-
-    except Exception as e:
-        # Always return the constructed URL as fallback — never fail silently
-        return jsonify({"booking_url": target_url, "fallback": True, "error": str(e)})
+    return jsonify({"booking_url": _build_tfs(legs_out, legs_in)})
 
 
 if __name__ == "__main__":
