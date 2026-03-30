@@ -297,14 +297,19 @@ def resolve_booking_url():
                     page.wait_for_timeout(500)
                     el.fill("")
                     page.keyboard.type(code, delay=80)
-                    page.wait_for_timeout(2000)
-                    # Wait for dropdown and pick the option that contains the airport code
+                    page.wait_for_timeout(2500)
+                    # Pick option with airport code in parentheses e.g. "(JFK)"
                     try:
-                        option = page.wait_for_selector(f'li[role="option"]:has-text("{code}")', timeout=5000)
+                        option = page.wait_for_selector(f'li[role="option"]:has-text("({code})")', timeout=5000)
                         js_click(option)
                     except Exception:
-                        page.keyboard.press("ArrowDown")
-                        page.keyboard.press("Enter")
+                        try:
+                            # Fallback: first option that contains the code
+                            option = page.wait_for_selector(f'li[role="option"]:has-text("{code}")', timeout=3000)
+                            js_click(option)
+                        except Exception:
+                            page.keyboard.press("ArrowDown")
+                            page.keyboard.press("Enter")
                     page.wait_for_timeout(1000)
 
                 # Fill origin
