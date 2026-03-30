@@ -291,31 +291,31 @@ def resolve_booking_url():
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
-                def type_into(selector, text):
-                    el = page.wait_for_selector(selector, timeout=8000)
-                    el.click()
+                def fill_airport(label_fragment, code):
+                    el = page.wait_for_selector(f'input[aria-label*="{label_fragment}"]', timeout=8000)
+                    js_click(el)
                     page.wait_for_timeout(500)
                     el.fill("")
-                    page.keyboard.type(text, delay=80)
+                    page.keyboard.type(code, delay=80)
+                    page.wait_for_timeout(2000)
+                    # Wait for dropdown and pick the option that contains the airport code
+                    try:
+                        option = page.wait_for_selector(f'li[role="option"]:has-text("{code}")', timeout=5000)
+                        js_click(option)
+                    except Exception:
+                        page.keyboard.press("ArrowDown")
+                        page.keyboard.press("Enter")
                     page.wait_for_timeout(1000)
 
                 # Fill origin
                 try:
-                    type_into('input[aria-label*="Where from"]', origin)
-                    page.wait_for_timeout(1000)
-                    page.keyboard.press("ArrowDown")
-                    page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
+                    fill_airport("Where from", origin)
                 except Exception as e:
                     debug["origin_err"] = str(e)
 
                 # Fill destination
                 try:
-                    type_into('input[aria-label*="Where to"]', destination)
-                    page.wait_for_timeout(1000)
-                    page.keyboard.press("ArrowDown")
-                    page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
+                    fill_airport("Where to", destination)
                 except Exception as e:
                     debug["dest_err"] = str(e)
 
