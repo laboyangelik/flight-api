@@ -275,12 +275,12 @@ def resolve_booking_url():
                 context = browser.contexts[0]
                 page = context.new_page()
 
-                # Track booking URL via network responses
+                # Track booking URL via network responses - only real booking pages
                 booking_url_from_nav = None
                 def handle_response(response):
                     nonlocal booking_url_from_nav
                     url = response.url
-                    if "tfs=" in url and "tfu=" in url:
+                    if "/booking" in url and "tfs=" in url and "tfu=" in url:
                         booking_url_from_nav = url
                 page.on("response", handle_response)
 
