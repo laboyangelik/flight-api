@@ -28,13 +28,13 @@ def _build_tfs(legs_out, legs_in=None):
     if legs_in:
         return_date = legs_in[0]["departure"][:10]
         return (
-            f"https://www.google.com/flights?hl=en"
+            f"https://www.google.com/travel/flights?hl=en"
             f"#flt={origin}.{destination}.{depart_date}"
             f"*{destination}.{origin}.{return_date};c:USD;e:1;sd:1;t:r"
         )
     else:
         return (
-            f"https://www.google.com/flights?hl=en"
+            f"https://www.google.com/travel/flights?hl=en"
             f"#flt={origin}.{destination}.{depart_date};c:USD;e:1;sd:1;t:o"
         )
 
@@ -245,228 +245,60 @@ def dates():
 
 @app.route("/resolve_booking_url")
 def resolve_booking_url():
-    """Use a headless browser to get the real Google Flights booking URL for a specific flight."""
+    """Use a headless browser to load and return a Google Flights search URL for a specific route."""
     args = request.args
     origin = p(args, "origin").upper()
     destination = p(args, "destination").upper()
     depart_date = p(args, "depart_date")
     return_date = p(args, "return_date") or None
-    airline = p(args, "airline")
-    flight_number = p(args, "flight_number")
 
-    if not origin or not destination or not depart_date or not airline or not flight_number:
-        return jsonify({"error": "origin, destination, depart_date, airline, and flight_number are required"}), 400
+    if not origin or not destination or not depart_date:
+        return jsonify({"error": "origin, destination, and depart_date are required"}), 400
+
+    # Build the #flt= deep-link URL — this is the correct Google Flights search format
+    legs_out = [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00"}]
+    legs_in = [{"from": destination, "to": origin, "departure": return_date + "T00:00:00"}] if return_date else None
+    target_url = _build_tfs(legs_out, legs_in)
 
     try:
         import os
         import steel
         from playwright.sync_api import sync_playwright
 
-        booking_url = None
-        debug = {}
         steel_api_key = os.environ.get("STEEL_API_KEY")
         steel_client = steel.Steel(steel_api_key=steel_api_key)
         session = steel_client.sessions.create(use_proxy=True, solve_captcha=True)
         cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
 
+        resolved_url = target_url
         try:
             with sync_playwright() as pw:
                 browser = pw.chromium.connect_over_cdp(cdp_url)
                 context = browser.contexts[0]
                 page = context.new_page()
 
-                # Track booking URL via network responses - only real booking pages
-                booking_url_from_nav = None
-                def handle_response(response):
-                    nonlocal booking_url_from_nav
-                    url = response.url
-                    if "/booking" in url and "tfs=" in url and "tfu=" in url:
-                        booking_url_from_nav = url
-                page.on("response", handle_response)
-
-                def js_click(el):
-                    page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
-
-                # Navigate to Google Flights with retries
-                gf_url = "https://www.google.com/travel/flights?hl=en&gl=us&curr=USD"
-                for nav_attempt in range(3):
-                    try:
-                        page.goto(gf_url, wait_until="domcontentloaded", timeout=60000)
-                        page.wait_for_timeout(3000)
-                        if "saves" in page.url or "explore" in page.url:
-                            continue
-                        break
-                    except Exception as nav_err:
-                        debug[f"nav_err_{nav_attempt}"] = str(nav_err)
-                        page.wait_for_timeout(2000)
-
-                debug["initial_url"] = page.url
-
-                def fill_airport(label_fragment, code):
-                    el = page.wait_for_selector(f'input[aria-label*="{label_fragment}"]', timeout=8000)
-                    # Triple click selects all existing text, then type replaces it
-                    el.triple_click()
-                    page.wait_for_timeout(300)
-                    page.keyboard.type(code, delay=100)
-                    page.wait_for_timeout(2500)
-                    # Pick option with airport code in parentheses e.g. "(JFK)"
-                    try:
-                        option = page.wait_for_selector(f'li[role="option"]:has-text("({code})")', timeout=5000)
-                        js_click(option)
-                    except Exception:
-                        try:
-                            option = page.wait_for_selector(f'li[role="option"]:has-text("{code}")', timeout=3000)
-                            js_click(option)
-                        except Exception:
-                            page.keyboard.press("ArrowDown")
-                            page.keyboard.press("Enter")
-                    page.wait_for_timeout(1000)
-
-                # Fill origin
+                page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                # Wait for Google Flights to process the #flt= fragment and load results
                 try:
-                    fill_airport("Where from", origin)
-                except Exception as e:
-                    debug["origin_err"] = str(e)
-
-                # Fill destination
-                try:
-                    fill_airport("Where to", destination)
-                except Exception as e:
-                    debug["dest_err"] = str(e)
-
-                # Fill departure date
-                try:
-                    date_input = page.query_selector('input[aria-label*="Departure"]')
-                    if date_input:
-                        js_click(date_input)
-                        page.wait_for_timeout(500)
-                        date_input.fill(depart_date)
-                        page.wait_for_timeout(500)
-                        page.keyboard.press("Enter")
-                        page.wait_for_timeout(1000)
-                except Exception as e:
-                    debug["date_err"] = str(e)
-
-                # If round trip, set return date, else switch to one-way
-                if return_date:
-                    try:
-                        ret_input = page.query_selector('input[aria-label*="Return"]')
-                        if ret_input:
-                            js_click(ret_input)
-                            page.wait_for_timeout(500)
-                            ret_input.fill(return_date)
-                            page.keyboard.press("Enter")
-                            page.wait_for_timeout(1000)
-                    except Exception as e:
-                        debug["return_err"] = str(e)
-                else:
-                    try:
-                        # Switch to one-way
-                        trip_btn = page.query_selector('[aria-label*="Round trip"], [data-travel-mode]')
-                        if trip_btn:
-                            js_click(trip_btn)
-                            page.wait_for_timeout(500)
-                            one_way = page.query_selector('li[data-value="2"], [aria-label*="One way"]')
-                            if one_way:
-                                js_click(one_way)
-                                page.wait_for_timeout(500)
-                    except Exception as e:
-                        debug["trip_type_err"] = str(e)
-
-                # Click Search
-                try:
-                    search_btn = page.get_by_role("button", name="Search")
-                    search_btn.wait_for(timeout=8000)
-                    js_click(search_btn.element_handle())
-                    page.wait_for_timeout(6000)
-                except Exception as e:
-                    debug["search_btn_err"] = str(e)
-                    # Fallback: press Enter
-                    try:
-                        page.keyboard.press("Enter")
-                        page.wait_for_timeout(6000)
-                    except Exception:
-                        pass
-
-                # Wait for flight results
-                try:
-                    page.wait_for_selector("li.pIav2d, .yR1LBd", timeout=20000)
+                    page.wait_for_selector("li.pIav2d, [data-ved], .yR1LBd", timeout=20000)
                 except Exception:
                     pass
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
 
-                debug["after_search_url"] = page.url
-                debug["li_count"] = len(page.query_selector_all("li"))
-
-                # Click matching flight or first result
-                matched = False
-                for selector in ["li.pIav2d", ".yR1LBd li", "li"]:
-                    items = page.query_selector_all(selector)
-                    for item in items:
-                        try:
-                            text = item.inner_text()
-                            if airline.lower() in text.lower() and str(flight_number) in text:
-                                js_click(item)
-                                page.wait_for_timeout(3000)
-                                matched = True
-                                break
-                        except Exception:
-                            continue
-                    if matched:
-                        break
-
-                if not matched:
-                    for selector in ["li.pIav2d", ".yR1LBd li"]:
-                        first = page.query_selector(selector)
-                        if first:
-                            js_click(first)
-                            page.wait_for_timeout(3000)
-                            break
-
-                debug["matched"] = matched
-
-                # Click Select/Book
-                try:
-                    page.wait_for_selector("button.WXaAwc, text=Select", timeout=8000)
-                except Exception:
-                    pass
-
-                for selector in ["button.WXaAwc", "text=Select", "text=Book now", "[jsname='j7LFlb']"]:
-                    try:
-                        btn = page.query_selector(selector)
-                        if btn:
-                            js_click(btn)
-                            page.wait_for_timeout(5000)
-                            break
-                    except Exception:
-                        continue
-
-                current_url = page.url
-                debug["final_url"] = current_url
-                debug["page_title"] = page.title()
-
-                if "tfs=" in current_url and "tfu=" in current_url:
-                    booking_url = current_url
-                elif booking_url_from_nav:
-                    booking_url = booking_url_from_nav
+                # Return the live URL — Google may append/normalize params after load
+                live_url = page.url
+                if live_url and "google.com" in live_url:
+                    resolved_url = live_url
 
                 browser.close()
         finally:
             steel_client.sessions.release(session.id)
 
-        if booking_url:
-            return jsonify({"booking_url": booking_url})
-        else:
-            tfs_url = _build_tfs(
-                [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00",
-                  "airline": airline, "flight_number": flight_number}],
-                [{"from": destination, "to": origin, "departure": return_date + "T00:00:00",
-                  "airline": airline, "flight_number": flight_number}] if return_date else None
-            )
-            return jsonify({"booking_url": tfs_url, "fallback": True, "debug": debug})
+        return jsonify({"booking_url": resolved_url})
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # Always return the constructed URL as fallback — never fail silently
+        return jsonify({"booking_url": target_url, "fallback": True, "error": str(e)})
 
 
 if __name__ == "__main__":
