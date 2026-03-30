@@ -6,7 +6,7 @@ from fli.search.dates import SearchDates
 from fli.models import FlightSearchFilters, DateSearchFilters, PassengerInfo, SortBy
 
 
-def _with_retry(fn, retries=3, backoff=10):
+def _with_retry(fn, retries=3, backoff=20):
     for attempt in range(retries):
         try:
             return fn()
