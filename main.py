@@ -300,11 +300,8 @@ def resolve_booking_url():
 
                 def fill_airport(label_fragment, code):
                     el = page.wait_for_selector(f'input[aria-label*="{label_fragment}"]', timeout=8000)
-                    js_click(el)
-                    page.wait_for_timeout(500)
-                    # Select all and delete existing content
-                    page.keyboard.press("Control+a")
-                    page.keyboard.press("Delete")
+                    # Triple click selects all existing text, then type replaces it
+                    el.triple_click()
                     page.wait_for_timeout(300)
                     page.keyboard.type(code, delay=100)
                     page.wait_for_timeout(2500)
@@ -374,21 +371,18 @@ def resolve_booking_url():
 
                 # Click Search
                 try:
-                    search_btn = None
-                    for sel in ['button[jsname="vLv7Lb"]', 'button.WXaAwc', 'button[aria-label*="Search"]', 'button:has-text("Search")']:
-                        try:
-                            search_btn = page.wait_for_selector(sel, timeout=4000)
-                            if search_btn:
-                                break
-                        except Exception:
-                            continue
-                    if search_btn:
-                        js_click(search_btn)
-                        page.wait_for_timeout(6000)
-                    else:
-                        debug["search_btn_err"] = "no selector matched"
+                    search_btn = page.get_by_role("button", name="Search")
+                    search_btn.wait_for(timeout=8000)
+                    js_click(search_btn.element_handle())
+                    page.wait_for_timeout(6000)
                 except Exception as e:
                     debug["search_btn_err"] = str(e)
+                    # Fallback: press Enter
+                    try:
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(6000)
+                    except Exception:
+                        pass
 
                 # Wait for flight results
                 try:
