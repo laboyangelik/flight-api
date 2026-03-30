@@ -262,19 +262,8 @@ def resolve_booking_url():
         import steel
         from playwright.sync_api import sync_playwright
 
-        if return_date:
-            search_url = (
-                f"https://www.google.com/flights?hl=en"
-                f"#flt={origin}.{destination}.{depart_date}"
-                f"*{destination}.{origin}.{return_date};c:USD;e:1;sd:1;t:f"
-            )
-        else:
-            search_url = (
-                f"https://www.google.com/flights?hl=en"
-                f"#flt={origin}.{destination}.{depart_date};c:USD;e:1;sd:1;t:o"
-            )
-
         booking_url = None
+        debug = {}
         steel_api_key = os.environ.get("STEEL_API_KEY")
         steel_client = steel.Steel(steel_api_key=steel_api_key)
         session = steel_client.sessions.create(use_proxy=True, solve_captcha=True)
@@ -286,31 +275,110 @@ def resolve_booking_url():
                 context = browser.contexts[0]
                 page = context.new_page()
 
-                # Track navigation to booking URL via network requests
+                # Track booking URL via network responses
                 booking_url_from_nav = None
                 def handle_response(response):
                     nonlocal booking_url_from_nav
                     url = response.url
                     if "tfs=" in url and "tfu=" in url:
                         booking_url_from_nav = url
-
                 page.on("response", handle_response)
 
-                page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
-
-                # Wait for flight results to render
-                try:
-                    page.wait_for_selector("li.pIav2d, [data-ved] li, .yR1LBd", timeout=20000)
-                except Exception:
-                    pass
+                # Navigate to Google Flights homepage
+                page.goto("https://www.google.com/travel/flights?hl=en&gl=us", wait_until="domcontentloaded", timeout=60000)
                 page.wait_for_timeout(3000)
 
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
-                # Try to find and click flight matching airline + flight number
+                def type_into(selector, text):
+                    el = page.wait_for_selector(selector, timeout=8000)
+                    el.click()
+                    page.wait_for_timeout(500)
+                    el.fill("")
+                    page.keyboard.type(text, delay=80)
+                    page.wait_for_timeout(1000)
+
+                # Fill origin
+                try:
+                    type_into('input[aria-label*="Where from"]', origin)
+                    page.wait_for_timeout(1000)
+                    page.keyboard.press("ArrowDown")
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
+                except Exception as e:
+                    debug["origin_err"] = str(e)
+
+                # Fill destination
+                try:
+                    type_into('input[aria-label*="Where to"]', destination)
+                    page.wait_for_timeout(1000)
+                    page.keyboard.press("ArrowDown")
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(1000)
+                except Exception as e:
+                    debug["dest_err"] = str(e)
+
+                # Fill departure date
+                try:
+                    date_input = page.query_selector('input[aria-label*="Departure"]')
+                    if date_input:
+                        js_click(date_input)
+                        page.wait_for_timeout(500)
+                        date_input.fill(depart_date)
+                        page.wait_for_timeout(500)
+                        page.keyboard.press("Enter")
+                        page.wait_for_timeout(1000)
+                except Exception as e:
+                    debug["date_err"] = str(e)
+
+                # If round trip, set return date, else switch to one-way
+                if return_date:
+                    try:
+                        ret_input = page.query_selector('input[aria-label*="Return"]')
+                        if ret_input:
+                            js_click(ret_input)
+                            page.wait_for_timeout(500)
+                            ret_input.fill(return_date)
+                            page.keyboard.press("Enter")
+                            page.wait_for_timeout(1000)
+                    except Exception as e:
+                        debug["return_err"] = str(e)
+                else:
+                    try:
+                        # Switch to one-way
+                        trip_btn = page.query_selector('[aria-label*="Round trip"], [data-travel-mode]')
+                        if trip_btn:
+                            js_click(trip_btn)
+                            page.wait_for_timeout(500)
+                            one_way = page.query_selector('li[data-value="2"], [aria-label*="One way"]')
+                            if one_way:
+                                js_click(one_way)
+                                page.wait_for_timeout(500)
+                    except Exception as e:
+                        debug["trip_type_err"] = str(e)
+
+                # Click Search
+                try:
+                    search_btn = page.wait_for_selector('button[aria-label*="Search"], button.WXaAwc, [jsname="vLv7Lb"]', timeout=5000)
+                    js_click(search_btn)
+                    page.wait_for_timeout(5000)
+                except Exception as e:
+                    debug["search_btn_err"] = str(e)
+
+                # Wait for flight results
+                try:
+                    page.wait_for_selector("li.pIav2d, .yR1LBd", timeout=20000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(2000)
+
+                debug["after_search_url"] = page.url
+                debug["li_count"] = len(page.query_selector_all("li"))
+
+                # Click matching flight or first result
                 matched = False
-                for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li", "li"]:
+                for selector in ["li.pIav2d", ".yR1LBd li", "li"]:
                     items = page.query_selector_all(selector)
                     for item in items:
                         try:
@@ -325,18 +393,19 @@ def resolve_booking_url():
                     if matched:
                         break
 
-                # Fall back to clicking first flight result
                 if not matched:
-                    for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li"]:
+                    for selector in ["li.pIav2d", ".yR1LBd li"]:
                         first = page.query_selector(selector)
                         if first:
                             js_click(first)
                             page.wait_for_timeout(3000)
                             break
 
-                # Click Select button and wait for booking URL
+                debug["matched"] = matched
+
+                # Click Select/Book
                 try:
-                    page.wait_for_selector("button.WXaAwc, [data-ved] button, text=Select", timeout=8000)
+                    page.wait_for_selector("button.WXaAwc, text=Select", timeout=8000)
                 except Exception:
                     pass
 
@@ -350,23 +419,14 @@ def resolve_booking_url():
                     except Exception:
                         continue
 
-                # Check final URL
                 current_url = page.url
-                page_title = page.title()
-                page_text = page.inner_text("body")[:500]
-                li_count = len(page.query_selector_all("li"))
+                debug["final_url"] = current_url
+                debug["page_title"] = page.title()
+
                 if "tfs=" in current_url and "tfu=" in current_url:
                     booking_url = current_url
                 elif booking_url_from_nav:
                     booking_url = booking_url_from_nav
-
-                debug = {
-                    "final_url": current_url,
-                    "page_title": page_title,
-                    "page_text_preview": page_text,
-                    "li_count": li_count,
-                    "matched": matched,
-                }
 
                 browser.close()
         finally:
