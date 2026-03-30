@@ -284,21 +284,19 @@ def resolve_booking_url():
                         booking_url_from_nav = url
                 page.on("response", handle_response)
 
-                # Navigate to Google Flights homepage
-                page.goto("https://www.google.com/travel/flights?hl=en&gl=us", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(4000)
-
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
-                # Make sure we're on the Flights tab, not Explore
-                try:
-                    flights_tab = page.query_selector('a[href*="/travel/flights"]:has-text("Flights"), [aria-label="Flights"]')
-                    if flights_tab:
-                        js_click(flights_tab)
-                        page.wait_for_timeout(2000)
-                except Exception:
-                    pass
+                # Navigate directly to Google Flights search page
+                page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="networkidle", timeout=60000)
+                page.wait_for_timeout(2000)
+
+                # If we got redirected away from the search form, navigate again
+                if "saves" in page.url or "explore" in page.url:
+                    page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="networkidle", timeout=60000)
+                    page.wait_for_timeout(2000)
+
+                debug["initial_url"] = page.url
 
                 def fill_airport(label_fragment, code):
                     el = page.wait_for_selector(f'input[aria-label*="{label_fragment}"]', timeout=8000)
