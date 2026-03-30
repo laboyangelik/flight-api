@@ -1,0 +1,12 @@
+{
+  "regions": ["iad1"],
+  "functions": {
+    "api/dates.py": { "maxDuration": 60 },
+    "api/search.py": { "maxDuration": 60 }
+  },
+  "rewrites": [
+    { "source": "/search", "destination": "/api/search" },
+    { "source": "/dates", "destination": "/api/dates" },
+    { "source": "/", "destination": "/api/search" }
+  ]
+}

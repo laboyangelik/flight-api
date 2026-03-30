@@ -1,2 +1,2 @@
 [deploy]
-startCommand = "gunicorn main:app --timeout 120 --bind 0.0.0.0:$PORT"
+startCommand = "gunicorn main:app --timeout 120 --bind 0.0.0.0:${PORT:-8080}"
