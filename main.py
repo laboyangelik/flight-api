@@ -349,6 +349,9 @@ def resolve_booking_url():
                     pass
                 page.wait_for_timeout(2000)
 
+                def js_click(el):
+                    page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
+
                 # Try to find and click flight matching airline + flight number
                 matched = False
                 for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li", "li"]:
@@ -357,7 +360,7 @@ def resolve_booking_url():
                         try:
                             text = item.inner_text()
                             if airline.lower() in text.lower() and str(flight_number) in text:
-                                item.click()
+                                js_click(item)
                                 page.wait_for_timeout(2000)
                                 matched = True
                                 break
@@ -371,7 +374,7 @@ def resolve_booking_url():
                     for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li"]:
                         first = page.query_selector(selector)
                         if first:
-                            first.click()
+                            js_click(first)
                             page.wait_for_timeout(2000)
                             break
 
@@ -385,7 +388,7 @@ def resolve_booking_url():
                     try:
                         btn = page.query_selector(selector)
                         if btn:
-                            btn.click()
+                            js_click(btn)
                             page.wait_for_timeout(4000)
                             break
                     except Exception:
