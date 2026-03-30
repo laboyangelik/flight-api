@@ -296,14 +296,14 @@ def resolve_booking_url():
 
                 page.on("response", handle_response)
 
-                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                page.goto(search_url, wait_until="domcontentloaded", timeout=60000)
 
                 # Wait for flight results to render
                 try:
-                    page.wait_for_selector("li.pIav2d, [data-ved] li, .yR1LBd", timeout=15000)
+                    page.wait_for_selector("li.pIav2d, [data-ved] li, .yR1LBd", timeout=20000)
                 except Exception:
                     pass
-                page.wait_for_timeout(2000)
+                page.wait_for_timeout(3000)
 
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
@@ -317,7 +317,7 @@ def resolve_booking_url():
                             text = item.inner_text()
                             if airline.lower() in text.lower() and str(flight_number) in text:
                                 js_click(item)
-                                page.wait_for_timeout(2000)
+                                page.wait_for_timeout(3000)
                                 matched = True
                                 break
                         except Exception:
@@ -331,12 +331,12 @@ def resolve_booking_url():
                         first = page.query_selector(selector)
                         if first:
                             js_click(first)
-                            page.wait_for_timeout(2000)
+                            page.wait_for_timeout(3000)
                             break
 
                 # Click Select button and wait for booking URL
                 try:
-                    page.wait_for_selector("button.WXaAwc, [data-ved] button, text=Select", timeout=5000)
+                    page.wait_for_selector("button.WXaAwc, [data-ved] button, text=Select", timeout=8000)
                 except Exception:
                     pass
 
@@ -345,7 +345,7 @@ def resolve_booking_url():
                         btn = page.query_selector(selector)
                         if btn:
                             js_click(btn)
-                            page.wait_for_timeout(4000)
+                            page.wait_for_timeout(5000)
                             break
                     except Exception:
                         continue

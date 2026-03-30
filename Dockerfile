@@ -14,4 +14,4 @@ COPY . .
 
 EXPOSE 8080
 
-CMD ["sh", "-c", "gunicorn main:app --timeout 120 --bind 0.0.0.0:${PORT:-8080}"]
+CMD ["sh", "-c", "gunicorn main:app --timeout 300 --bind 0.0.0.0:${PORT:-8080}"]
