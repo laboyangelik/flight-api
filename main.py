@@ -287,14 +287,18 @@ def resolve_booking_url():
                 def js_click(el):
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
-                # Navigate directly to Google Flights search page
-                page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="domcontentloaded", timeout=60000)
-                page.wait_for_timeout(3000)
-
-                # If we got redirected away from the search form, navigate again
-                if "saves" in page.url or "explore" in page.url:
-                    page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="domcontentloaded", timeout=60000)
-                    page.wait_for_timeout(3000)
+                # Navigate to Google Flights with retries
+                gf_url = "https://www.google.com/travel/flights?hl=en&gl=us&curr=USD"
+                for nav_attempt in range(3):
+                    try:
+                        page.goto(gf_url, wait_until="domcontentloaded", timeout=60000)
+                        page.wait_for_timeout(3000)
+                        if "saves" in page.url or "explore" in page.url:
+                            continue
+                        break
+                    except Exception as nav_err:
+                        debug[f"nav_err_{nav_attempt}"] = str(nav_err)
+                        page.wait_for_timeout(2000)
 
                 debug["initial_url"] = page.url
 
