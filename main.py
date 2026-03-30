@@ -320,7 +320,7 @@ def resolve_booking_url():
 
         booking_url = None
         steel_client = steel.Steel(steel_api_key=os.environ.get("STEEL_API_KEY"))
-        session = steel_client.sessions.create(solve_captcha=True)
+        session = steel_client.sessions.create()
 
         try:
             with sync_playwright() as pw:
