@@ -2,3 +2,4 @@ flights
 flask
 gunicorn
 playwright
+steel-sdk

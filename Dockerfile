@@ -2,19 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies for Playwright/Firefox
-RUN apt-get update && apt-get install -y \
-    wget curl git \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y wget curl && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Firefox
-RUN playwright install firefox --with-deps
+# Install Playwright chromium (lightweight, for CDP connection to Steel)
+RUN playwright install chromium --with-deps
 
-# Copy app
 COPY . .
 
 EXPOSE 8080

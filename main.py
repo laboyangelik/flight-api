@@ -302,6 +302,8 @@ def resolve_booking_url():
         return jsonify({"error": "origin, destination, depart_date, airline, and flight_number are required"}), 400
 
     try:
+        import os
+        import steel
         from playwright.sync_api import sync_playwright
 
         if return_date:
@@ -317,56 +319,53 @@ def resolve_booking_url():
             )
 
         booking_url = None
+        steel_client = steel.Steel(steel_api_key=os.environ.get("STEEL_API_KEY"))
+        session = steel_client.sessions.create(use_proxy=True, solve_captcha=True)
 
-        with sync_playwright() as pw:
-            browser = pw.firefox.launch(headless=True)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-                viewport={"width": 1280, "height": 800},
-            )
-            page = context.new_page()
-            page.goto(search_url, wait_until="networkidle", timeout=30000)
-            page.wait_for_timeout(3000)
+        try:
+            with sync_playwright() as pw:
+                browser = pw.chromium.connect_over_cdp(session.websocket_url)
+                context = browser.contexts[0]
+                page = context.new_page()
+                page.goto(search_url, wait_until="networkidle", timeout=30000)
+                page.wait_for_timeout(3000)
 
-            # Find and click the flight matching our airline + flight number
-            flight_label = f"{airline} {flight_number}"
-            matched = False
+                # Find flight matching airline + flight number, fall back to first result
+                matched = False
+                cards = page.query_selector_all("[data-ved]")
+                for card in cards:
+                    text = card.inner_text()
+                    if airline.lower() in text.lower() and str(flight_number) in text:
+                        card.click()
+                        page.wait_for_timeout(2000)
+                        matched = True
+                        break
 
-            # Try to find a flight card containing the airline and flight number
-            cards = page.query_selector_all("[data-ved]")
-            for card in cards:
-                text = card.inner_text()
-                if airline.lower() in text.lower() and str(flight_number) in text:
-                    card.click()
-                    page.wait_for_timeout(2000)
-                    matched = True
-                    break
+                if not matched:
+                    first = page.query_selector("li[data-ved]") or page.query_selector(".pIav2d")
+                    if first:
+                        first.click()
+                        page.wait_for_timeout(2000)
 
-            if not matched:
-                # Click the first result as fallback
-                first = page.query_selector("li[data-ved]") or page.query_selector(".pIav2d")
-                if first:
-                    first.click()
-                    page.wait_for_timeout(2000)
+                # Click Select/Book button
+                for selector in ["text=Select", "text=Book", "[data-ved] button", "button.WXaAwc"]:
+                    btn = page.query_selector(selector)
+                    if btn:
+                        btn.click()
+                        page.wait_for_timeout(3000)
+                        break
 
-            # Look for a "Select" or "Book" button and click it
-            for selector in ["text=Select", "text=Book", "[data-ved] button", "button.WXaAwc"]:
-                btn = page.query_selector(selector)
-                if btn:
-                    btn.click()
-                    page.wait_for_timeout(3000)
-                    break
+                current_url = page.url
+                if "tfs=" in current_url:
+                    booking_url = current_url
 
-            current_url = page.url
-            if "tfs=" in current_url:
-                booking_url = current_url
-
-            browser.close()
+                browser.close()
+        finally:
+            steel_client.sessions.release(session.id)
 
         if booking_url:
             return jsonify({"booking_url": booking_url})
         else:
-            # Fall back to tfs-constructed URL
             tfs_url = _build_tfs(
                 [{"from": origin, "to": destination, "departure": depart_date + "T00:00:00",
                   "airline": airline, "flight_number": flight_number}],
