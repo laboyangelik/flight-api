@@ -288,13 +288,13 @@ def resolve_booking_url():
                     page.evaluate("el => { el.scrollIntoView({block:'center'}); el.click(); }", el)
 
                 # Navigate directly to Google Flights search page
-                page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="networkidle", timeout=60000)
-                page.wait_for_timeout(2000)
+                page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(3000)
 
                 # If we got redirected away from the search form, navigate again
                 if "saves" in page.url or "explore" in page.url:
-                    page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="networkidle", timeout=60000)
-                    page.wait_for_timeout(2000)
+                    page.goto("https://www.google.com/travel/flights?hl=en&gl=us&curr=USD", wait_until="domcontentloaded", timeout=60000)
+                    page.wait_for_timeout(3000)
 
                 debug["initial_url"] = page.url
 
