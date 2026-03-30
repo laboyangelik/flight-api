@@ -327,37 +327,74 @@ def resolve_booking_url():
                 browser = pw.chromium.connect_over_cdp(session.websocket_url)
                 context = browser.contexts[0]
                 page = context.new_page()
-                page.goto(search_url, wait_until="networkidle", timeout=30000)
-                page.wait_for_timeout(3000)
 
-                # Find flight matching airline + flight number, fall back to first result
+                # Track navigation to booking URL via network requests
+                booking_url_from_nav = None
+                def handle_response(response):
+                    nonlocal booking_url_from_nav
+                    url = response.url
+                    if "tfs=" in url and "tfu=" in url:
+                        booking_url_from_nav = url
+
+                page.on("response", handle_response)
+
+                page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+
+                # Wait for flight results to render
+                try:
+                    page.wait_for_selector("li.pIav2d, [data-ved] li, .yR1LBd", timeout=15000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(2000)
+
+                # Try to find and click flight matching airline + flight number
                 matched = False
-                cards = page.query_selector_all("[data-ved]")
-                for card in cards:
-                    text = card.inner_text()
-                    if airline.lower() in text.lower() and str(flight_number) in text:
-                        card.click()
-                        page.wait_for_timeout(2000)
-                        matched = True
+                for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li", "li"]:
+                    items = page.query_selector_all(selector)
+                    for item in items:
+                        try:
+                            text = item.inner_text()
+                            if airline.lower() in text.lower() and str(flight_number) in text:
+                                item.click()
+                                page.wait_for_timeout(2000)
+                                matched = True
+                                break
+                        except Exception:
+                            continue
+                    if matched:
                         break
 
+                # Fall back to clicking first flight result
                 if not matched:
-                    first = page.query_selector("li[data-ved]") or page.query_selector(".pIav2d")
-                    if first:
-                        first.click()
-                        page.wait_for_timeout(2000)
+                    for selector in ["li.pIav2d", "[data-ved] li", ".yR1LBd li"]:
+                        first = page.query_selector(selector)
+                        if first:
+                            first.click()
+                            page.wait_for_timeout(2000)
+                            break
 
-                # Click Select/Book button
-                for selector in ["text=Select", "text=Book", "[data-ved] button", "button.WXaAwc"]:
-                    btn = page.query_selector(selector)
-                    if btn:
-                        btn.click()
-                        page.wait_for_timeout(3000)
-                        break
+                # Click Select button and wait for booking URL
+                try:
+                    page.wait_for_selector("button.WXaAwc, [data-ved] button, text=Select", timeout=5000)
+                except Exception:
+                    pass
 
+                for selector in ["button.WXaAwc", "text=Select", "text=Book now", "[jsname='j7LFlb']"]:
+                    try:
+                        btn = page.query_selector(selector)
+                        if btn:
+                            btn.click()
+                            page.wait_for_timeout(4000)
+                            break
+                    except Exception:
+                        continue
+
+                # Check final URL
                 current_url = page.url
-                if "tfs=" in current_url:
+                if "tfs=" in current_url and "tfu=" in current_url:
                     booking_url = current_url
+                elif booking_url_from_nav:
+                    booking_url = booking_url_from_nav
 
                 browser.close()
         finally:
