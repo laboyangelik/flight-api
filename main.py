@@ -1,8 +1,20 @@
+import time
 from flask import Flask, request, jsonify
 from fli.core import resolve_airport, build_flight_segments, build_date_search_segments, parse_max_stops, parse_cabin_class, parse_sort_by
 from fli.search.flights import SearchFlights
 from fli.search.dates import SearchDates
 from fli.models import FlightSearchFilters, DateSearchFilters, PassengerInfo, SortBy
+
+
+def _with_retry(fn, retries=3, backoff=10):
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                time.sleep(backoff * (attempt + 1))
+            else:
+                raise
 
 app = Flask(__name__)
 
@@ -167,7 +179,7 @@ def search():
             seat_type=cabin,
             sort_by=sort_by,
         )
-        results = SearchFlights().search(filters, top_n=top_n) or []
+        results = _with_retry(lambda: SearchFlights().search(filters, top_n=top_n)) or []
 
         flights = []
         for r in results[:top_n]:
@@ -243,7 +255,7 @@ def dates():
             to_date=end_date,
             duration=trip_duration if is_round_trip else None,
         )
-        results = SearchDates().search(filters) or []
+        results = _with_retry(lambda: SearchDates().search(filters)) or []
 
         result_dates = []
         for r in results:
