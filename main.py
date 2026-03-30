@@ -374,9 +374,19 @@ def resolve_booking_url():
 
                 # Click Search
                 try:
-                    search_btn = page.wait_for_selector('button[aria-label*="Search"], button.WXaAwc, [jsname="vLv7Lb"]', timeout=5000)
-                    js_click(search_btn)
-                    page.wait_for_timeout(5000)
+                    search_btn = None
+                    for sel in ['button[jsname="vLv7Lb"]', 'button.WXaAwc', 'button[aria-label*="Search"]', 'button:has-text("Search")']:
+                        try:
+                            search_btn = page.wait_for_selector(sel, timeout=4000)
+                            if search_btn:
+                                break
+                        except Exception:
+                            continue
+                    if search_btn:
+                        js_click(search_btn)
+                        page.wait_for_timeout(6000)
+                    else:
+                        debug["search_btn_err"] = "no selector matched"
                 except Exception as e:
                     debug["search_btn_err"] = str(e)
 
