@@ -277,7 +277,7 @@ def resolve_booking_url():
         booking_url = None
         steel_api_key = os.environ.get("STEEL_API_KEY")
         steel_client = steel.Steel(steel_api_key=steel_api_key)
-        session = steel_client.sessions.create(solve_captcha=True)
+        session = steel_client.sessions.create(use_proxy=True, solve_captcha=True)
         cdp_url = f"wss://connect.steel.dev?sessionId={session.id}&apiKey={steel_api_key}"
 
         try:
